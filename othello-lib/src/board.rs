@@ -1,102 +1,230 @@
 use crate::disc::Disc;
-use std::{fmt, path::Iter};
+use arrayvec::ArrayVec;
+use std::fmt::{self, Debug};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum BoardError {
-    OutOfBoundsError,
-    SquareOccupiedError,
+    OutOfBounds,
+    SquareOccupied,
+    InvalidMove,
 }
 
+#[derive(Copy, Clone)]
+enum Direction {
+    North,
+    NorthEast,
+    East,
+    SouthEast,
+    South,
+    SouthWest,
+    West,
+    NorthWest,
+}
+impl Direction {
+    fn delta_row_col(self) -> (isize, isize) {
+        match self {
+            Self::North => (-1, 0),
+            Self::NorthEast => (-1, 1),
+            Self::East => (0, 1),
+            Self::SouthEast => (1, 1),
+            Self::South => (1, 0),
+            Self::SouthWest => (1, -1),
+            Self::West => (0, -1),
+            Self::NorthWest => (-1, -1),
+        }
+    }
+    const ALL: [Direction; 8] = [
+        Self::North,
+        Self::NorthEast,
+        Self::East,
+        Self::SouthEast,
+        Self::South,
+        Self::SouthWest,
+        Self::West,
+        Self::NorthWest,
+    ];
+}
+
+#[derive(Clone, PartialEq, Eq)]
 pub struct Board {
-    squares: [Disc; 64],
+    squares: [Disc; Board::BOARD_SURFACE],
 }
 
 impl Board {
+    const BOARD_WIDTH: usize = 8;
+    const BOARD_HEIGHT: usize = 8;
+    const BOARD_MAX_DIM: usize = 8; // should be equal to the max of WIDTH and HEIGHT
+    const BOARD_SURFACE: usize = Board::BOARD_WIDTH * Board::BOARD_HEIGHT;
+
     pub fn new() -> Self {
-        Self {
-            squares: [Disc::Empty; 64],
+        let mut board = Self {
+            squares: [Disc::Empty; Self::BOARD_SURFACE],
+        };
+
+        let mid_row = Self::BOARD_HEIGHT / 2;
+        let mid_col = Self::BOARD_WIDTH / 2;
+
+        let init = [
+            (mid_row, mid_col, Disc::White),
+            (mid_row - 1, mid_col, Disc::Black),
+            (mid_row, mid_col - 1, Disc::Black),
+            (mid_row - 1, mid_col - 1, Disc::White),
+        ];
+
+        for &(r, c, disc) in &init {
+            let idx = board.index(r, c).expect("center coords should be valid");
+            board
+                .set_field(idx, disc)
+                .expect("setting initial disc cannot fail");
         }
+
+        board
     }
 
-    pub fn index(row: u8, col: u8) -> Result<u8, BoardError> {
+    pub fn index(&self, row: usize, col: usize) -> Result<usize, BoardError> {
         match (row, col) {
-            (8.., _) => Err(BoardError::OutOfBoundsError),
-            (_, 8..) => Err(BoardError::OutOfBoundsError),
-            (row, col) => Ok(8 * row + col),
+            (Board::BOARD_HEIGHT.., _) => Err(BoardError::OutOfBounds),
+            (_, Board::BOARD_WIDTH..) => Err(BoardError::OutOfBounds),
+            (row, col) => Ok(Board::BOARD_WIDTH * row + col),
         }
     }
 
-    pub fn row(index: u8) -> Result<u8, BoardError> {
+    pub fn row_col(&self, index: usize) -> Result<(usize, usize), BoardError> {
         match index {
-            64.. => Err(BoardError::OutOfBoundsError),
-            index => Ok(index / 8),
+            Board::BOARD_SURFACE.. => Err(BoardError::OutOfBounds),
+            index => Ok((index / Board::BOARD_WIDTH, index % Board::BOARD_WIDTH)),
         }
     }
 
-    pub fn col(index: u8) -> Result<u8, BoardError> {
-        match index {
-            64.. => Err(BoardError::OutOfBoundsError),
-            index => Ok(index % 8),
+    fn step_row(&self, row: usize, delta: isize) -> Option<usize> {
+        Self::step_coord(row, delta, Self::BOARD_HEIGHT)
+    }
+
+    fn step_col(&self, col: usize, delta: isize) -> Option<usize> {
+        Self::step_coord(col, delta, Self::BOARD_WIDTH)
+    }
+
+    const fn step_coord(coord: usize, delta: isize, limit: usize) -> Option<usize> {
+        let next = coord as isize + delta;
+        if next < 0 || next >= limit as isize {
+            None
+        } else {
+            Some(next as usize)
         }
     }
 
-    pub fn get_field(self, index: usize) -> Result<Disc, BoardError> {
+    fn next_index(&self, index: usize, direction: Direction) -> Option<usize> {
+        let (row, col) = self.row_col(index).ok()?;
+        let (dr, dc) = direction.delta_row_col();
+
+        let next_row = self.step_row(row, dr)?;
+        let next_col = self.step_col(col, dc)?;
+
+        let next_index = self.index(next_row, next_col).ok()?;
+        Some(next_index)
+    }
+
+    pub fn get_field(&self, index: usize) -> Result<Disc, BoardError> {
         self.squares
             .get(index)
             .copied()
-            .ok_or(BoardError::OutOfBoundsError)
-    }
-
-    pub fn count_discs(self, color: Disc) -> usize {
-        self.squares.iter().filter(|sq| **sq == color).count()
+            .ok_or(BoardError::OutOfBounds)
     }
 
     fn set_field(&mut self, index: usize, disc: Disc) -> Result<(), BoardError> {
-        let square: &mut Disc = self
-            .squares
-            .get_mut(index)
-            .ok_or(BoardError::OutOfBoundsError)?;
+        let square: &mut Disc = self.squares.get_mut(index).ok_or(BoardError::OutOfBounds)?;
         *square = disc;
         Ok(())
     }
 
-    pub fn play_move(&mut self, index: usize, disc: Disc) -> Result<(), BoardError> {
-        let square: &mut Disc = self
-            .squares
-            .get_mut(index)
-            .ok_or(BoardError::OutOfBoundsError)?;
-        if *square != Disc::Empty {
-            return Err(BoardError::SquareOccupiedError);
+    fn flips_in_direction(
+        &self,
+        start: usize,
+        disc: Disc,
+        dir: Direction,
+    ) -> Option<ArrayVec<usize, { Board::BOARD_MAX_DIM }>> {
+        let opponent = disc.opposite()?;
+        let mut flips = ArrayVec::<usize, { Board::BOARD_MAX_DIM }>::new();
+        let mut index = self.next_index(start, dir)?;
+        if self.get_field(index).ok()? != opponent {
+            return None;
         }
-        todo!("perform flipping logic");
-        self.set_field(index, disc);
+        flips.push(index);
+        while let Some(next) = self.next_index(index, dir) {
+            index = next;
+            match self.get_field(index).ok()? {
+                d if d == opponent => flips.push(index),
+                d if d == disc => return Some(flips),
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    fn all_flips(
+        &self,
+        start: usize,
+        disc: Disc,
+    ) -> Option<ArrayVec<usize, { Board::BOARD_SURFACE }>> {
+        let mut all = ArrayVec::<usize, { Board::BOARD_SURFACE }>::new();
+        for &dir in Direction::ALL.iter() {
+            if let Some(flips) = self.flips_in_direction(start, disc, dir) {
+                all.try_extend_from_slice(&flips).ok()?;
+            }
+        }
+        if all.is_empty() {
+            None
+        } else {
+            Some(all)
+        }
+    }
+
+    pub fn apply_move(&mut self, start: usize, disc: Disc) -> Result<(), BoardError> {
+        match self.get_field(start) {
+            Ok(Disc::Empty) => {}
+            Ok(_) => return Err(BoardError::SquareOccupied),
+            Err(_) => return Err(BoardError::OutOfBounds),
+        }
+        let flips = self.all_flips(start, disc).ok_or(BoardError::InvalidMove)?;
+        self.set_field(start, disc)?;
+        for index in flips {
+            self.set_field(index, disc)?
+        }
         Ok(())
     }
 
-    pub fn empty_squares(&self) -> impl Iterator<Item = usize> + '_ {
-        self.squares
-            .iter() // Iterator<Item = &Disc>
-            .copied() // Iterator<Item = Disc>
-            .enumerate() // Iterator<Item = (usize, Disc)>
-            .filter_map(
-                |(idx, disc)| {
-                    if disc == Disc::Empty {
-                        Some(idx)
-                    } else {
-                        None
-                    }
-                },
-            )
+    pub fn is_valid_move(&self, start: usize, disc: Disc) -> bool {
+        let Ok(Disc::Empty) = self.get_field(start) else {
+            return false;
+        };
+        self.all_flips(start, disc).is_some()
     }
 }
 
 impl fmt::Display for Board {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for row in 0..8 {
-            for col in 0..8 {
-                let sym = match self.squares[row * 8 + col] {
-                    Disc::Black => '●',
-                    Disc::White => '○',
+        for row in 0..Board::BOARD_HEIGHT {
+            for col in 0..Board::BOARD_WIDTH {
+                let sym = match self.squares[row * Board::BOARD_WIDTH + col] {
+                    Disc::Black => '○',
+                    Disc::White => '●',
+                    Disc::Empty => '.',
+                };
+                write!(f, "{} ", sym)?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
+}
+
+impl fmt::Debug for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for row in 0..Board::BOARD_HEIGHT {
+            for col in 0..Board::BOARD_WIDTH {
+                let sym = match self.squares[row * Board::BOARD_WIDTH + col] {
+                    Disc::Black => '○',
+                    Disc::White => '●',
                     Disc::Empty => '.',
                 };
                 write!(f, "{} ", sym)?;
@@ -112,37 +240,368 @@ mod tests {
     use super::*;
 
     #[test]
-    fn index_from_valid_row_col() {
-        assert_eq!(Board::index(1, 0), Ok(8));
-        assert_eq!(Board::index(2, 0), Ok(16));
-        assert_eq!(Board::index(3, 0), Ok(24));
-        assert_eq!(Board::index(4, 0), Ok(32));
-        assert_eq!(Board::index(5, 0), Ok(40));
-        assert_eq!(Board::index(6, 0), Ok(48));
-        assert_eq!(Board::index(7, 0), Ok(56));
-
-        assert_eq!(Board::index(0, 1), Ok(1));
-        assert_eq!(Board::index(0, 2), Ok(2));
-        assert_eq!(Board::index(0, 3), Ok(3));
-        assert_eq!(Board::index(0, 4), Ok(4));
-        assert_eq!(Board::index(0, 5), Ok(5));
-        assert_eq!(Board::index(0, 6), Ok(6));
-        assert_eq!(Board::index(0, 7), Ok(7));
-
-        assert_eq!(Board::index(0, 0), Ok(0));
-        assert_eq!(Board::index(1, 1), Ok(9));
-        assert_eq!(Board::index(2, 2), Ok(18));
-        assert_eq!(Board::index(3, 3), Ok(27));
-        assert_eq!(Board::index(4, 4), Ok(36));
-        assert_eq!(Board::index(5, 5), Ok(45));
-        assert_eq!(Board::index(6, 6), Ok(54));
-        assert_eq!(Board::index(7, 7), Ok(63));
+    fn index_valid_coordinates() {
+        let board = Board::new();
+        assert_eq!(board.index(0, 0), Ok(0));
+        assert_eq!(board.index(0, 7), Ok(7));
+        assert_eq!(board.index(7, 0), Ok(56));
+        assert_eq!(board.index(7, 7), Ok(63))
     }
 
     #[test]
-    fn index_from_invalid_row_col() {
-        assert_eq!(Board::index(8, 0), Err(BoardError::OutOfBoundsError));
-        assert_eq!(Board::index(0, 8), Err(BoardError::OutOfBoundsError));
-        assert_eq!(Board::index(8, 8), Err(BoardError::OutOfBoundsError));
+    fn index_out_of_bounds() {
+        let board = Board::new();
+        assert_eq!(board.index(0, 8), Err(BoardError::OutOfBounds));
+        assert_eq!(board.index(8, 0), Err(BoardError::OutOfBounds));
+        assert_eq!(board.index(8, 8), Err(BoardError::OutOfBounds));
+    }
+
+    #[test]
+    fn row_col_valid_indices() {
+        let board = Board::new();
+        assert_eq!(board.row_col(0), Ok((0, 0)));
+        assert_eq!(board.row_col(7), Ok((0, 7)),);
+        assert_eq!(board.row_col(56), Ok((7, 0)),);
+        assert_eq!(board.row_col(63), Ok((7, 7)),);
+    }
+
+    #[test]
+    fn row_col_out_of_bounds() {
+        let board = Board::new();
+        assert_eq!(board.row_col(64), Err(BoardError::OutOfBounds));
+    }
+
+    #[test]
+    fn get_field_valid() {
+        let board = Board::new();
+        assert_eq!(board.get_field(0), Ok(Disc::Empty));
+        assert_eq!(board.get_field(27), Ok(Disc::White));
+        assert_eq!(board.get_field(28), Ok(Disc::Black));
+        assert_eq!(board.get_field(35), Ok(Disc::Black));
+        assert_eq!(board.get_field(36), Ok(Disc::White));
+        assert_eq!(board.get_field(63), Ok(Disc::Empty));
+    }
+
+    #[test]
+    fn get_field_out_of_bounds() {
+        let board = Board::new();
+        assert_eq!(board.get_field(64), Err(BoardError::OutOfBounds));
+    }
+
+    #[test]
+    fn set_field_valid() {
+        let mut board = Board::new();
+        assert_eq!(board.get_field(0), Ok(Disc::Empty));
+        assert_eq!(board.set_field(0, Disc::White), Ok(()));
+        assert_eq!(board.get_field(0), Ok(Disc::White));
+        assert_eq!(board.set_field(0, Disc::Black), Ok(()));
+        assert_eq!(board.get_field(0), Ok(Disc::Black));
+    }
+
+    #[test]
+    fn set_field_out_of_bounds() {
+        let mut board = Board::new();
+        assert_eq!(
+            board.set_field(64, Disc::White),
+            Err(BoardError::OutOfBounds)
+        );
+    }
+
+    #[test]
+    fn next_index_in_bounds() {
+        let board = Board::new();
+        assert_eq!(board.next_index(9, Direction::North), Some(1));
+        assert_eq!(board.next_index(9, Direction::NorthEast), Some(2));
+        assert_eq!(board.next_index(9, Direction::East), Some(10));
+        assert_eq!(board.next_index(9, Direction::SouthEast), Some(18));
+        assert_eq!(board.next_index(9, Direction::South), Some(17));
+        assert_eq!(board.next_index(9, Direction::SouthWest), Some(16));
+        assert_eq!(board.next_index(9, Direction::West), Some(8));
+        assert_eq!(board.next_index(9, Direction::NorthWest), Some(0));
+
+        assert_eq!(board.next_index(54, Direction::North), Some(46));
+        assert_eq!(board.next_index(54, Direction::NorthEast), Some(47));
+        assert_eq!(board.next_index(54, Direction::East), Some(55));
+        assert_eq!(board.next_index(54, Direction::SouthEast), Some(63));
+        assert_eq!(board.next_index(54, Direction::South), Some(62));
+        assert_eq!(board.next_index(54, Direction::SouthWest), Some(61));
+        assert_eq!(board.next_index(54, Direction::West), Some(53));
+        assert_eq!(board.next_index(54, Direction::NorthWest), Some(45));
+    }
+
+    #[test]
+    fn next_index_out_of_bounds() {
+        let board = Board::new();
+        assert_eq!(board.next_index(0, Direction::SouthWest), None);
+        assert_eq!(board.next_index(0, Direction::West), None);
+        assert_eq!(board.next_index(0, Direction::NorthWest), None);
+        assert_eq!(board.next_index(0, Direction::North), None);
+        assert_eq!(board.next_index(0, Direction::NorthEast), None);
+
+        assert_eq!(board.next_index(7, Direction::NorthWest), None);
+        assert_eq!(board.next_index(7, Direction::North), None);
+        assert_eq!(board.next_index(7, Direction::NorthEast), None);
+        assert_eq!(board.next_index(7, Direction::East), None);
+        assert_eq!(board.next_index(7, Direction::SouthEast), None);
+
+        assert_eq!(board.next_index(63, Direction::NorthEast), None);
+        assert_eq!(board.next_index(63, Direction::East), None);
+        assert_eq!(board.next_index(63, Direction::SouthEast), None);
+        assert_eq!(board.next_index(63, Direction::South), None);
+        assert_eq!(board.next_index(63, Direction::SouthWest), None);
+
+        assert_eq!(board.next_index(56, Direction::SouthEast), None);
+        assert_eq!(board.next_index(56, Direction::South), None);
+        assert_eq!(board.next_index(56, Direction::SouthWest), None);
+        assert_eq!(board.next_index(56, Direction::West), None);
+        assert_eq!(board.next_index(56, Direction::NorthWest), None);
+    }
+
+    #[test]
+    fn flips_in_direction_some() {
+        let mut board = Board::new();
+        assert!(board
+            .flips_in_direction(44, Disc::Black, Direction::North)
+            .is_some());
+        assert!(board
+            .flips_in_direction(37, Disc::Black, Direction::West)
+            .is_some());
+        assert!(board
+            .flips_in_direction(20, Disc::White, Direction::South)
+            .is_some());
+        assert!(board
+            .flips_in_direction(29, Disc::White, Direction::West)
+            .is_some());
+        board.set_field(18, Disc::Black).unwrap();
+        assert!(board
+            .flips_in_direction(45, Disc::Black, Direction::NorthWest)
+            .is_some())
+    }
+
+    #[test]
+    fn flips_in_direction_none() {
+        let mut board = Board::new();
+        assert!(board
+            .flips_in_direction(44, Disc::White, Direction::North)
+            .is_none());
+        assert!(board
+            .flips_in_direction(37, Disc::White, Direction::West)
+            .is_none());
+        assert!(board
+            .flips_in_direction(20, Disc::Black, Direction::South)
+            .is_none());
+        assert!(board
+            .flips_in_direction(29, Disc::Black, Direction::West)
+            .is_none());
+        board.set_field(36, Disc::Black).unwrap();
+        assert!(board
+            .flips_in_direction(44, Disc::Black, Direction::North)
+            .is_none());
+        assert!(board
+            .flips_in_direction(20, Disc::White, Direction::South)
+            .is_none());
+
+        assert!(board
+            .flips_in_direction(0, Disc::White, Direction::North)
+            .is_none());
+        assert!(board
+            .flips_in_direction(0, Disc::White, Direction::North)
+            .is_none());
+        assert!(board
+            .flips_in_direction(0, Disc::Black, Direction::South)
+            .is_none());
+        assert!(board
+            .flips_in_direction(0, Disc::Black, Direction::South)
+            .is_none());
+    }
+
+    #[test]
+    fn all_flips_some() {
+        let mut board = Board::new();
+        assert!(board.all_flips(44, Disc::Black).is_some());
+        assert!(board.all_flips(37, Disc::Black).is_some());
+        assert!(board.all_flips(20, Disc::White).is_some());
+        assert!(board.all_flips(29, Disc::White).is_some());
+        board.set_field(18, Disc::Black).unwrap();
+        assert!(board.all_flips(45, Disc::Black).is_some())
+    }
+
+    #[test]
+    fn all_flips_none() {
+        let mut board = Board::new();
+        assert!(board.all_flips(44, Disc::White).is_none());
+        assert!(board.all_flips(37, Disc::White).is_none());
+        assert!(board.all_flips(20, Disc::Black).is_none());
+        assert!(board.all_flips(29, Disc::Black).is_none());
+        board.set_field(36, Disc::Black).unwrap();
+        assert!(board.all_flips(44, Disc::Black).is_none());
+        assert!(board.all_flips(20, Disc::White).is_none());
+
+        assert!(board.all_flips(0, Disc::White).is_none());
+        assert!(board.all_flips(0, Disc::White).is_none());
+        assert!(board.all_flips(0, Disc::Black).is_none());
+        assert!(board.all_flips(0, Disc::Black).is_none());
+    }
+
+    #[test]
+    fn is_valid_move_valid() {
+        let mut board = Board::new();
+        assert_eq!(board.is_valid_move(44, Disc::Black), true);
+        assert_eq!(board.is_valid_move(37, Disc::Black), true);
+        assert_eq!(board.is_valid_move(20, Disc::White), true);
+        assert_eq!(board.is_valid_move(29, Disc::White), true);
+        board.set_field(18, Disc::Black).unwrap();
+        assert_eq!(board.is_valid_move(45, Disc::Black), true);
+    }
+
+    #[test]
+    fn is_valid_move_occupied() {
+        let mut board = Board::new();
+        assert_eq!(board.is_valid_move(36, Disc::Black), false);
+        assert_eq!(board.is_valid_move(36, Disc::White), false);
+        board.set_field(20, Disc::White).unwrap();
+        assert_eq!(board.is_valid_move(36, Disc::Black), false);
+        assert_eq!(board.is_valid_move(36, Disc::White), false);
+        board.set_field(36, Disc::Black).unwrap();
+        assert_eq!(board.is_valid_move(36, Disc::Black), false);
+        assert_eq!(board.is_valid_move(36, Disc::White), false);
+    }
+
+    #[test]
+    fn is_valid_move_out_of_bounds() {
+        let board = Board::new();
+        assert_eq!(board.is_valid_move(64, Disc::White), false);
+        assert_eq!(board.is_valid_move(64, Disc::Black), false);
+    }
+
+    #[test]
+    fn is_valid_move_invalid() {
+        let mut board = Board::new();
+        assert_eq!(board.is_valid_move(44, Disc::White), false);
+        assert_eq!(board.is_valid_move(37, Disc::White), false);
+        assert_eq!(board.is_valid_move(20, Disc::Black), false);
+        assert_eq!(board.is_valid_move(29, Disc::Black), false);
+        board.set_field(36, Disc::Black).unwrap();
+        assert_eq!(board.is_valid_move(44, Disc::Black), false);
+        assert_eq!(board.is_valid_move(20, Disc::White), false);
+
+        assert_eq!(board.is_valid_move(0, Disc::White), false);
+        assert_eq!(board.is_valid_move(0, Disc::White), false);
+        assert_eq!(board.is_valid_move(0, Disc::Black), false);
+        assert_eq!(board.is_valid_move(0, Disc::Black), false);
+    }
+
+    #[test]
+    fn is_valid_move_as_empty() {
+        let mut board = Board::new();
+        board.set_field(24, Disc::White).unwrap();
+        board.set_field(25, Disc::Black).unwrap();
+        assert_eq!(board.is_valid_move(26, Disc::White), true);
+        assert_eq!(board.is_valid_move(26, Disc::Black), true);
+        assert_eq!(board.is_valid_move(26, Disc::Empty), false);
+    }
+
+    #[test]
+    fn apply_move_valid() {
+        let mut board = Board::new();
+
+        assert_eq!(board.apply_move(44, Disc::Black), Ok(()));
+        assert_eq!(board.get_field(44), Ok(Disc::Black));
+        assert_eq!(board.get_field(36), Ok(Disc::Black));
+
+        assert_eq!(board.apply_move(45, Disc::White), Ok(()));
+        assert_eq!(board.get_field(45), Ok(Disc::White));
+        assert_eq!(board.get_field(36), Ok(Disc::White));
+
+        assert_eq!(board.apply_move(37, Disc::Black), Ok(()));
+        assert_eq!(board.get_field(37), Ok(Disc::Black));
+        assert_eq!(board.get_field(36), Ok(Disc::Black));
+
+        assert_eq!(board.apply_move(43, Disc::White), Ok(()));
+        assert_eq!(board.get_field(43), Ok(Disc::White));
+        assert_eq!(board.get_field(35), Ok(Disc::White));
+        assert_eq!(board.get_field(44), Ok(Disc::White));
+    }
+
+    #[test]
+    fn apply_move_occupied() {
+        let mut board = Board::new();
+        let mut reference = Board::new();
+
+        // does not have to be a BoardError::SquareOccupied, since BoardError::InvalidMove also applies, as this move would flip nothing
+        assert!(board.apply_move(35, Disc::Black).is_err());
+        assert_eq!(board, reference);
+        board.set_field(19, Disc::Black).unwrap();
+        reference.set_field(19, Disc::Black).unwrap();
+        // this move would have flipped 27, so the only error that applies is BoardError::SquareOccupied, therefore we can check for an exact match
+        assert_eq!(
+            board.apply_move(35, Disc::Black),
+            Err(BoardError::SquareOccupied)
+        );
+        assert_eq!(board, reference);
+        board.set_field(35, Disc::Black).unwrap();
+        reference.set_field(35, Disc::Black).unwrap();
+        // this again does not have to be a BoardError::SquareOccupied, since BoardError::InvalidMove also applies, as this move would flip nothing
+        assert!(board.apply_move(35, Disc::Black).is_err());
+        assert_eq!(board, reference);
+    }
+
+    #[test]
+    fn apply_move_out_of_bounds() {
+        let mut board = Board::new();
+        let mut reference = Board::new();
+
+        // does not have to be a BoardError::OutOfBounds, since BoardError::InvalidMove also applies, as this move would flip nothing
+        assert!(board.apply_move(64, Disc::Black).is_err());
+        assert_eq!(board, reference);
+
+        board.set_field(63, Disc::White).unwrap();
+        reference.set_field(63, Disc::White).unwrap();
+        board.set_field(62, Disc::Black).unwrap();
+        reference.set_field(62, Disc::Black).unwrap();
+
+        // this move would have flipped 63, so the only error that applies is BoardError::OutOfBounds, therefore we can check for an exact match
+        assert_eq!(
+            board.apply_move(64, Disc::Black),
+            Err(BoardError::OutOfBounds)
+        );
+        assert_eq!(board, reference);
+    }
+
+    #[test]
+    fn apply_move_invalid() {
+        let mut board = Board::new();
+        let mut reference = Board::new();
+
+        assert_eq!(
+            board.apply_move(0, Disc::Black),
+            Err(BoardError::InvalidMove)
+        );
+
+        board.set_field(1, Disc::White).unwrap();
+        reference.set_field(1, Disc::White).unwrap();
+        board.set_field(2, Disc::Black).unwrap();
+        reference.set_field(2, Disc::Black).unwrap();
+
+        assert_eq!(board, reference);
+
+        assert_eq!(board.apply_move(0, Disc::Black), Ok(()));
+
+        assert_ne!(board, reference)
+    }
+
+    #[test]
+    fn board_constructor() {
+        let board = Board::new();
+
+        for index in 0..64 {
+            match index {
+                27 => assert_eq!(board.get_field(index), Ok(Disc::White)),
+                28 => assert_eq!(board.get_field(index), Ok(Disc::Black)),
+                35 => assert_eq!(board.get_field(index), Ok(Disc::Black)),
+                36 => assert_eq!(board.get_field(index), Ok(Disc::White)),
+                _ => assert_eq!(board.get_field(index), Ok(Disc::Empty)),
+            }
+        }
     }
 }
