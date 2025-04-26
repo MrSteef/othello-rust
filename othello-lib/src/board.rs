@@ -47,7 +47,7 @@ impl Direction {
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Board {
-    squares: [Disc; Board::BOARD_SURFACE],
+    squares: [Option<Disc>; Board::BOARD_SURFACE],
 }
 
 impl Board {
@@ -58,7 +58,7 @@ impl Board {
 
     pub fn new() -> Self {
         let mut board = Self {
-            squares: [Disc::Empty; Self::BOARD_SURFACE],
+            squares: [None; Self::BOARD_SURFACE],
         };
 
         let mid_row = Self::BOARD_HEIGHT / 2;
@@ -124,7 +124,7 @@ impl Board {
         Some(next_index)
     }
 
-    pub fn get_field(&self, index: usize) -> Result<Disc, BoardError> {
+    pub fn get_field(&self, index: usize) -> Result<Option<Disc>, BoardError> {
         self.squares
             .get(index)
             .copied()
@@ -132,8 +132,8 @@ impl Board {
     }
 
     fn set_field(&mut self, index: usize, disc: Disc) -> Result<(), BoardError> {
-        let square: &mut Disc = self.squares.get_mut(index).ok_or(BoardError::OutOfBounds)?;
-        *square = disc;
+        let square: &mut Option<Disc> = self.squares.get_mut(index).ok_or(BoardError::OutOfBounds)?;
+        *square = Some(disc);
         Ok(())
     }
 
@@ -143,18 +143,18 @@ impl Board {
         disc: Disc,
         dir: Direction,
     ) -> Option<ArrayVec<usize, { Board::BOARD_MAX_DIM }>> {
-        let opponent = disc.opposite()?;
+        let opponent = disc.opposite();
         let mut flips = ArrayVec::<usize, { Board::BOARD_MAX_DIM }>::new();
         let mut index = self.next_index(start, dir)?;
-        if self.get_field(index).ok()? != opponent {
+        if self.get_field(index).ok()? != Some(opponent) {
             return None;
         }
         flips.push(index);
         while let Some(next) = self.next_index(index, dir) {
             index = next;
             match self.get_field(index).ok()? {
-                d if d == opponent => flips.push(index),
-                d if d == disc => return Some(flips),
+                Some(d) if d == opponent => flips.push(index),
+                Some(d) if d == disc => return Some(flips),
                 _ => return None,
             }
         }
@@ -181,7 +181,7 @@ impl Board {
 
     pub fn apply_move(&mut self, start: usize, disc: Disc) -> Result<(), BoardError> {
         match self.get_field(start) {
-            Ok(Disc::Empty) => {}
+            Ok(None) => {}
             Ok(_) => return Err(BoardError::SquareOccupied),
             Err(_) => return Err(BoardError::OutOfBounds),
         }
@@ -194,7 +194,7 @@ impl Board {
     }
 
     pub fn is_valid_move(&self, start: usize, disc: Disc) -> bool {
-        let Ok(Disc::Empty) = self.get_field(start) else {
+        let Ok(None) = self.get_field(start) else {
             return false;
         };
         self.all_flips(start, disc).is_some()
@@ -204,7 +204,7 @@ impl Board {
         self.squares
             .iter()
             .copied()
-            .filter(|&s| s == disc)
+            .filter(|&s| s == Some(disc))
             .count()
     }
 }
@@ -214,9 +214,9 @@ impl fmt::Display for Board {
         for row in 0..Board::BOARD_HEIGHT {
             for col in 0..Board::BOARD_WIDTH {
                 let sym = match self.squares[row * Board::BOARD_WIDTH + col] {
-                    Disc::Black => '○',
-                    Disc::White => '●',
-                    Disc::Empty => '.',
+                    Some(Disc::Black) => '○',
+                    Some(Disc::White) => '●',
+                    None => '.',
                 };
                 write!(f, "{} ", sym)?;
             }
@@ -231,9 +231,9 @@ impl fmt::Debug for Board {
         for row in 0..Board::BOARD_HEIGHT {
             for col in 0..Board::BOARD_WIDTH {
                 let sym = match self.squares[row * Board::BOARD_WIDTH + col] {
-                    Disc::Black => '○',
-                    Disc::White => '●',
-                    Disc::Empty => '.',
+                    Some(Disc::Black) => '○',
+                    Some(Disc::White) => '●',
+                    None => '.',
                 };
                 write!(f, "{} ", sym)?;
             }
@@ -282,12 +282,12 @@ mod tests {
     #[test]
     fn get_field_valid() {
         let board = Board::new();
-        assert_eq!(board.get_field(0), Ok(Disc::Empty));
-        assert_eq!(board.get_field(27), Ok(Disc::White));
-        assert_eq!(board.get_field(28), Ok(Disc::Black));
-        assert_eq!(board.get_field(35), Ok(Disc::Black));
-        assert_eq!(board.get_field(36), Ok(Disc::White));
-        assert_eq!(board.get_field(63), Ok(Disc::Empty));
+        assert_eq!(board.get_field(0), Ok(None));
+        assert_eq!(board.get_field(27), Ok(Some(Disc::White)));
+        assert_eq!(board.get_field(28), Ok(Some(Disc::Black)));
+        assert_eq!(board.get_field(35), Ok(Some(Disc::Black)));
+        assert_eq!(board.get_field(36), Ok(Some(Disc::White)));
+        assert_eq!(board.get_field(63), Ok(None));
     }
 
     #[test]
@@ -299,11 +299,11 @@ mod tests {
     #[test]
     fn set_field_valid() {
         let mut board = Board::new();
-        assert_eq!(board.get_field(0), Ok(Disc::Empty));
+        assert_eq!(board.get_field(0), Ok(None));
         assert_eq!(board.set_field(0, Disc::White), Ok(()));
-        assert_eq!(board.get_field(0), Ok(Disc::White));
+        assert_eq!(board.get_field(0), Ok(Some(Disc::White)));
         assert_eq!(board.set_field(0, Disc::Black), Ok(()));
-        assert_eq!(board.get_field(0), Ok(Disc::Black));
+        assert_eq!(board.get_field(0), Ok(Some(Disc::Black)));
     }
 
     #[test]
@@ -500,35 +500,25 @@ mod tests {
     }
 
     #[test]
-    fn is_valid_move_as_empty() {
-        let mut board = Board::new();
-        board.set_field(24, Disc::White).unwrap();
-        board.set_field(25, Disc::Black).unwrap();
-        assert_eq!(board.is_valid_move(26, Disc::White), true);
-        assert_eq!(board.is_valid_move(26, Disc::Black), true);
-        assert_eq!(board.is_valid_move(26, Disc::Empty), false);
-    }
-
-    #[test]
     fn apply_move_valid() {
         let mut board = Board::new();
 
         assert_eq!(board.apply_move(44, Disc::Black), Ok(()));
-        assert_eq!(board.get_field(44), Ok(Disc::Black));
-        assert_eq!(board.get_field(36), Ok(Disc::Black));
+        assert_eq!(board.get_field(44), Ok(Some(Disc::Black)));
+        assert_eq!(board.get_field(36), Ok(Some(Disc::Black)));
 
         assert_eq!(board.apply_move(45, Disc::White), Ok(()));
-        assert_eq!(board.get_field(45), Ok(Disc::White));
-        assert_eq!(board.get_field(36), Ok(Disc::White));
+        assert_eq!(board.get_field(45), Ok(Some(Disc::White)));
+        assert_eq!(board.get_field(36), Ok(Some(Disc::White)));
 
         assert_eq!(board.apply_move(37, Disc::Black), Ok(()));
-        assert_eq!(board.get_field(37), Ok(Disc::Black));
-        assert_eq!(board.get_field(36), Ok(Disc::Black));
+        assert_eq!(board.get_field(37), Ok(Some(Disc::Black)));
+        assert_eq!(board.get_field(36), Ok(Some(Disc::Black)));
 
         assert_eq!(board.apply_move(43, Disc::White), Ok(()));
-        assert_eq!(board.get_field(43), Ok(Disc::White));
-        assert_eq!(board.get_field(35), Ok(Disc::White));
-        assert_eq!(board.get_field(44), Ok(Disc::White));
+        assert_eq!(board.get_field(43), Ok(Some(Disc::White)));
+        assert_eq!(board.get_field(35), Ok(Some(Disc::White)));
+        assert_eq!(board.get_field(44), Ok(Some(Disc::White)));
     }
 
     #[test]
@@ -604,11 +594,11 @@ mod tests {
 
         for index in 0..64 {
             match index {
-                27 => assert_eq!(board.get_field(index), Ok(Disc::White)),
-                28 => assert_eq!(board.get_field(index), Ok(Disc::Black)),
-                35 => assert_eq!(board.get_field(index), Ok(Disc::Black)),
-                36 => assert_eq!(board.get_field(index), Ok(Disc::White)),
-                _ => assert_eq!(board.get_field(index), Ok(Disc::Empty)),
+                27 => assert_eq!(board.get_field(index), Ok(Some(Disc::White))),
+                28 => assert_eq!(board.get_field(index), Ok(Some(Disc::Black))),
+                35 => assert_eq!(board.get_field(index), Ok(Some(Disc::Black))),
+                36 => assert_eq!(board.get_field(index), Ok(Some(Disc::White))),
+                _ => assert_eq!(board.get_field(index), Ok(None)),
             }
         }
     }

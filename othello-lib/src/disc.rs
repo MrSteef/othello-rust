@@ -1,16 +1,14 @@
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Disc {
     Black,
-    White,
-    Empty,
+    White
 }
 
 impl Disc {
-    pub fn opposite(&self) -> Option<Disc> {
+    pub fn opposite(&self) -> Disc {
         match self {
-            Self::Black => Some(Self::White),
-            Self::White => Some(Self::Black),
-            Self::Empty => None,
+            Self::Black => Self::White,
+            Self::White => Self::Black
         }
     }
 }
