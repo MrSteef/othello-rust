@@ -199,6 +199,14 @@ impl Board {
         };
         self.all_flips(start, disc).is_some()
     }
+
+    pub fn count_discs(&self, disc: Disc) -> usize {
+        self.squares
+            .iter()
+            .copied()
+            .filter(|&s| s == disc)
+            .count()
+    }
 }
 
 impl fmt::Display for Board {
@@ -602,6 +610,31 @@ mod tests {
                 36 => assert_eq!(board.get_field(index), Ok(Disc::White)),
                 _ => assert_eq!(board.get_field(index), Ok(Disc::Empty)),
             }
+        }
+    }
+
+    fn assert_counts(board: &Board, black: usize, white: usize) {
+        assert_eq!(board.count_discs(Disc::Black), black);
+        assert_eq!(board.count_discs(Disc::White), white);
+    }
+
+    #[test]
+    fn count_discs() {
+        let mut board = Board::new();
+
+        assert_counts(&board, 2, 2);
+
+        // (square_to_play, color_to_play, expected_black, expected_white)
+        let moves = [
+            (19, Disc::Black, 4, 1),
+            (18, Disc::White, 3, 3),
+            (17, Disc::Black, 5, 2),
+            (29, Disc::White, 4, 4),
+        ];
+
+        for &(pos, disc, exp_black, exp_white) in &moves {
+            board.apply_move(pos, disc).unwrap();
+            assert_counts(&board, exp_black, exp_white);
         }
     }
 }

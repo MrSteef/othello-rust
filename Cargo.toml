@@ -1,5 +1,4 @@
 [workspace]
 members = [
-  "othello-lib",
-  "othello-cli",
+  "othello-lib"
 ]
