@@ -132,7 +132,8 @@ impl Board {
     }
 
     fn set_field(&mut self, index: usize, disc: Disc) -> Result<(), BoardError> {
-        let square: &mut Option<Disc> = self.squares.get_mut(index).ok_or(BoardError::OutOfBounds)?;
+        let square: &mut Option<Disc> =
+            self.squares.get_mut(index).ok_or(BoardError::OutOfBounds)?;
         *square = Some(disc);
         Ok(())
     }
@@ -209,11 +210,16 @@ impl Board {
     }
 
     pub fn count_empty_squares(&self) -> usize {
+        self.squares.iter().copied().filter(|&s| s == None).count()
+    }
+
+    pub fn valid_moves(&self, disc: Disc) -> ArrayVec<usize, { Board::BOARD_SURFACE }> {
         self.squares
-        .iter()
-        .copied()
-        .filter(|&s| s == None)
-        .count()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.is_none().then_some(i))
+            .filter(|&i| self.is_valid_move(i, disc))
+            .collect()
     }
 }
 
@@ -635,5 +641,33 @@ mod tests {
             board.apply_move(pos, disc).unwrap();
             assert_counts(&board, exp_black, exp_white, exp_empty);
         }
+    }
+
+    #[test]
+    fn valid_moves() {
+        let mut board = Board::new();
+
+        assert_eq!(&board.valid_moves(Disc::Black)[..], &[19, 26, 37, 44]);
+        assert_eq!(&board.valid_moves(Disc::White)[..], &[20, 29, 34, 43]);
+
+        board.apply_move(19, Disc::Black).unwrap();
+
+        assert_eq!(&board.valid_moves(Disc::Black)[..], &[37, 44, 45]);
+        assert_eq!(&board.valid_moves(Disc::White)[..], &[18, 20, 34]);
+
+        board.apply_move(18, Disc::White).unwrap();
+
+        assert_eq!(&board.valid_moves(Disc::Black)[..], &[17, 26, 37, 44]);
+        assert_eq!(&board.valid_moves(Disc::White)[..], &[11, 20, 29, 34, 43]);
+
+        board.apply_move(17, Disc::Black).unwrap();
+
+        assert_eq!(&board.valid_moves(Disc::Black)[..], &[26, 37, 44, 45]);
+        assert_eq!(&board.valid_moves(Disc::White)[..], &[9, 11, 20, 29, 34, 43]);
+
+        board.apply_move(29, Disc::White).unwrap();
+
+        assert_eq!(&board.valid_moves(Disc::Black)[..], &[21, 37, 45]);
+        assert_eq!(&board.valid_moves(Disc::White)[..], &[9, 10, 11, 34, 42, 43]);
     }
 }
