@@ -207,6 +207,14 @@ impl Board {
             .filter(|&s| s == Some(disc))
             .count()
     }
+
+    pub fn count_empty_squares(&self) -> usize {
+        self.squares
+        .iter()
+        .copied()
+        .filter(|&s| s == None)
+        .count()
+    }
 }
 
 impl fmt::Display for Board {
@@ -603,28 +611,29 @@ mod tests {
         }
     }
 
-    fn assert_counts(board: &Board, black: usize, white: usize) {
+    fn assert_counts(board: &Board, black: usize, white: usize, empty: usize) {
         assert_eq!(board.count_discs(Disc::Black), black);
         assert_eq!(board.count_discs(Disc::White), white);
+        assert_eq!(board.count_empty_squares(), empty);
     }
 
     #[test]
-    fn count_discs() {
+    fn count_discs_and_empty_squares() {
         let mut board = Board::new();
 
-        assert_counts(&board, 2, 2);
+        assert_counts(&board, 2, 2, 60);
 
         // (square_to_play, color_to_play, expected_black, expected_white)
         let moves = [
-            (19, Disc::Black, 4, 1),
-            (18, Disc::White, 3, 3),
-            (17, Disc::Black, 5, 2),
-            (29, Disc::White, 4, 4),
+            (19, Disc::Black, 4, 1, 59),
+            (18, Disc::White, 3, 3, 58),
+            (17, Disc::Black, 5, 2, 57),
+            (29, Disc::White, 4, 4, 56),
         ];
 
-        for &(pos, disc, exp_black, exp_white) in &moves {
+        for &(pos, disc, exp_black, exp_white, exp_empty) in &moves {
             board.apply_move(pos, disc).unwrap();
-            assert_counts(&board, exp_black, exp_white);
+            assert_counts(&board, exp_black, exp_white, exp_empty);
         }
     }
 }
