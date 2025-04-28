@@ -2,7 +2,7 @@ use crate::disc::Disc;
 use arrayvec::ArrayVec;
 use std::fmt::{self, Debug};
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoardError {
     OutOfBounds,
     SquareOccupied,
@@ -51,10 +51,10 @@ pub struct Board {
 }
 
 impl Board {
-    const BOARD_WIDTH: usize = 8;
-    const BOARD_HEIGHT: usize = 8;
-    const BOARD_MAX_DIM: usize = 8; // should be equal to the max of WIDTH and HEIGHT
-    const BOARD_SURFACE: usize = Board::BOARD_WIDTH * Board::BOARD_HEIGHT;
+    pub const BOARD_WIDTH: usize = 8;
+    pub const BOARD_HEIGHT: usize = 8;
+    pub const BOARD_MAX_DIM: usize = 8; // should be equal to the max of WIDTH and HEIGHT
+    pub const BOARD_SURFACE: usize = Board::BOARD_WIDTH * Board::BOARD_HEIGHT;
 
     pub fn new() -> Self {
         let mut board = Self {
